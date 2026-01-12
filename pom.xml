@@ -5,13 +5,13 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>org.keycloak</groupId>
-    <artifactId>keycloak-subject-id-attribute-mapper</artifactId>
-    <version>1.1.0</version>
+    <artifactId>keycloak-idp-mappers</artifactId>
+    <version>2.0.0</version>
 
     <properties>
-        <keycloak.version>22.0.5</keycloak.version>
-        <maven.compiler.source>17</maven.compiler.source>
-        <maven.compiler.target>17</maven.compiler.target>
+        <keycloak.version>26.5.0</keycloak.version>
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
     </properties>
 
     <dependencies>
@@ -24,6 +24,18 @@
         <dependency>
             <groupId>org.keycloak</groupId>
             <artifactId>keycloak-server-spi-private</artifactId>
+            <version>${keycloak.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.keycloak</groupId>
+            <artifactId>keycloak-services</artifactId>
+            <version>${keycloak.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.keycloak</groupId>
+            <artifactId>keycloak-saml-core-public</artifactId>
             <version>${keycloak.version}</version>
             <scope>provided</scope>
         </dependency>

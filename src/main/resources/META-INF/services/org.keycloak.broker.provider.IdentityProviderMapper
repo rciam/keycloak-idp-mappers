@@ -1,1 +1,3 @@
 org.keycloak.broker.provider.SubjectIdIdPMapper
+org.keycloak.broker.provider.oidc.UserAttributeTemplateMapper
+org.keycloak.broker.provider.saml.UserAttributeTemplateMapper
