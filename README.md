@@ -4,6 +4,8 @@ This extension contains some Identity Provider (IdP) attribute mappers for Keycl
 - **Subject ID Mapper** : Generate a unique Subject Identifier. The identifier is constructed from two components: a “unique ID” and a “scope,” which are concatenated using an "@" symbol (ASCII 64) as a delimiter. 
 By default, the generated identifier is mapped to the user's username, but this mapping can be customised through the mapper configuration settings
 - **User attribute Template Importer** : Generate user attribute based on template
+- **Hashed User ID Mapper** : Generate a new user attribute to be used as a unique identifier for the user.
+- **EduPersonTargetedID Mapper** : Import eduPersonTargetedID saml attribute if it exists in assertion into the specified user attribute.
 
 ### Installation instructions:
 

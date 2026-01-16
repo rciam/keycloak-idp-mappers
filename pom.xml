@@ -9,7 +9,7 @@
     <version>2.0.0</version>
 
     <properties>
-        <keycloak.version>26.5.0</keycloak.version>
+        <keycloak.version>26.5.1</keycloak.version>
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
     </properties>
@@ -36,6 +36,12 @@
         <dependency>
             <groupId>org.keycloak</groupId>
             <artifactId>keycloak-saml-core-public</artifactId>
+            <version>${keycloak.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.keycloak</groupId>
+            <artifactId>keycloak-saml-core</artifactId>
             <version>${keycloak.version}</version>
             <scope>provided</scope>
         </dependency>

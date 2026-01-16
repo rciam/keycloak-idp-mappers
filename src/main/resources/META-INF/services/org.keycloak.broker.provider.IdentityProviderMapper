@@ -1,3 +1,5 @@
 org.keycloak.broker.provider.SubjectIdIdPMapper
+org.keycloak.broker.provider.UserHashedIDMapper
 org.keycloak.broker.provider.oidc.UserAttributeTemplateMapper
 org.keycloak.broker.provider.saml.UserAttributeTemplateMapper
+org.keycloak.broker.provider.saml.EduPersonTargetedIDMapper
