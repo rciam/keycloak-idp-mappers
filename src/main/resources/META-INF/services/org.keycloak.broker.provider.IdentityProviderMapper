@@ -3,3 +3,4 @@ org.keycloak.broker.provider.UserHashedIDMapper
 org.keycloak.broker.provider.oidc.UserAttributeTemplateMapper
 org.keycloak.broker.provider.saml.UserAttributeTemplateMapper
 org.keycloak.broker.provider.saml.EduPersonTargetedIDMapper
+org.keycloak.broker.provider.PosixUsernameMapper
