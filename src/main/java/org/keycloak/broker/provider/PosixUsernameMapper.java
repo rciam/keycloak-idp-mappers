@@ -86,7 +86,8 @@ public class PosixUsernameMapper extends AbstractIdentityProviderMapper {
     @Override
     public String getHelpText() {
         return "Generates a unique, POSIX-compliant attribute value (e.g. Linux username) "
-                + "derived from the user's firstName, lastName, and Keycloak username.";
+                + "derived from the user's firstName, lastName, and Keycloak username."
+                + "If a username mapper exists, username mapper id must be less than this mapper id for posix creation based on username from mapper.";
     }
 
     @Override
