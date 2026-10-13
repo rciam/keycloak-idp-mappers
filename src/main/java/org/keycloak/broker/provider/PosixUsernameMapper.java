@@ -1,6 +1,7 @@
 package org.keycloak.broker.provider;
 
 import org.keycloak.models.IdentityProviderMapperModel;
+import org.keycloak.models.IdentityProviderSyncMode;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserModel;
@@ -13,6 +14,14 @@ import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * Generates a unique, POSIX-compliant attribute value (e.g. a Linux username) for brokered users.
+ *
+ * <p>Generation happens in the post-user phase of the broker flow ({@code importNewUser} /
+ * {@code updateBrokeredUser}), after every mapper's {@code preprocessFederatedIdentity} has run.
+ * This makes the result independent of mapper execution order: the value is always derived from
+ * the final {@link UserModel} username, including any change made by a Username Template Importer.
+ */
 public class PosixUsernameMapper extends AbstractIdentityProviderMapper {
 
     public static final String[] COMPATIBLE_PROVIDERS = {
@@ -29,6 +38,9 @@ public class PosixUsernameMapper extends AbstractIdentityProviderMapper {
 
     private static final int DEFAULT_MAX_LENGTH = 10;
     private static final int UPPER_MAX_LENGTH   = 24;
+
+    /** Safety bound for collision resolution, to prevent an endless loop. */
+    private static final int MAX_COLLISION_ATTEMPTS = 1000;
 
     private static final List<ProviderConfigProperty> CONFIG_PROPERTIES = new ArrayList<>();
 
@@ -86,8 +98,9 @@ public class PosixUsernameMapper extends AbstractIdentityProviderMapper {
     @Override
     public String getHelpText() {
         return "Generates a unique, POSIX-compliant attribute value (e.g. Linux username) "
-                + "derived from the user's firstName, lastName, and Keycloak username."
-                + "If a username mapper exists, username mapper id must be less than this mapper id for posix creation based on username from mapper.";
+                + "derived from the user's firstName, lastName, and final Keycloak username. "
+                + "The value is generated once and never changed afterwards. "
+                + "Use sync mode FORCE to backfill users that existed before this mapper was added.";
     }
 
     @Override
@@ -95,45 +108,65 @@ public class PosixUsernameMapper extends AbstractIdentityProviderMapper {
         return CONFIG_PROPERTIES;
     }
 
-    /**
-     * Accept every IdP type — return an empty array so the wildcard match applies.
-     */
     @Override
     public String[] getCompatibleProviders() {
         return COMPATIBLE_PROVIDERS;
     }
 
-    // -------------------------------------------------------------------------
-    // Mapper lifecycle hooks
-    // -------------------------------------------------------------------------
-
-    /** Called during the first-login / broker flow, before the user is persisted. */
     @Override
-    public void preprocessFederatedIdentity(KeycloakSession session,
-                                            RealmModel realm,
-                                            IdentityProviderMapperModel mapperModel,
-                                            BrokeredIdentityContext context) {
-        var targetAttr = mapperModel.getConfig().get(PROP_TARGET_ATTRIBUTE);
-        if (targetAttr == null || targetAttr.isBlank()) return;
-
-        var generated = generateAndReserve(session, realm, mapperModel, context, null);
-        context.setUserAttribute(targetAttr, generated);
+    public boolean supportsSyncMode(IdentityProviderSyncMode syncMode) {
+        return true; // IMPORT, LEGACY, FORCE
     }
 
-    /** Called on subsequent logins to keep the attribute up-to-date. */
+    // -------------------------------------------------------------------------
+    // Mapper lifecycle hooks
+    //
+    // preprocessFederatedIdentity is intentionally NOT overridden: in that phase
+    // other mappers (e.g. Username Template Importer) may not have run yet.
+    // -------------------------------------------------------------------------
+
+    /** First broker login: a new user has just been created. */
+    @Override
+    public void importNewUser(KeycloakSession session,
+                              RealmModel realm,
+                              UserModel user,
+                              IdentityProviderMapperModel mapperModel,
+                              BrokeredIdentityContext context) {
+        assignIfMissing(session, realm, user, mapperModel);
+    }
+
+    /** Subsequent logins, or first login linked to an existing user (sync mode FORCE). */
     @Override
     public void updateBrokeredUser(KeycloakSession session,
                                    RealmModel realm,
                                    UserModel user,
                                    IdentityProviderMapperModel mapperModel,
                                    BrokeredIdentityContext context) {
+        assignIfMissing(session, realm, user, mapperModel);
+    }
+
+    /** Subsequent logins with sync mode LEGACY. */
+    @Override
+    public void updateBrokeredUserLegacy(KeycloakSession session,
+                                         RealmModel realm,
+                                         UserModel user,
+                                         IdentityProviderMapperModel mapperModel,
+                                         BrokeredIdentityContext context) {
+        assignIfMissing(session, realm, user, mapperModel);
+    }
+
+    private void assignIfMissing(KeycloakSession session,
+                                 RealmModel realm,
+                                 UserModel user,
+                                 IdentityProviderMapperModel mapperModel) {
         String targetAttr = mapperModel.getConfig().get(PROP_TARGET_ATTRIBUTE);
         if (targetAttr == null || targetAttr.isBlank()) return;
 
-        // Only regenerate if the attribute is not yet set
+        // Never regenerate: once assigned, the POSIX username is stable.
         if (user.getFirstAttribute(targetAttr) != null) return;
 
-        String generated = generateAndReserve(session, realm, mapperModel, context, user);
+        String generated = generateAndReserve(session, realm, mapperModel,
+                user.getFirstName(), user.getLastName(), user.getUsername(), user);
         user.setSingleAttribute(targetAttr, generated);
     }
 
@@ -144,43 +177,50 @@ public class PosixUsernameMapper extends AbstractIdentityProviderMapper {
     private String generateAndReserve(KeycloakSession session,
                                       RealmModel realm,
                                       IdentityProviderMapperModel mapperModel,
-                                      BrokeredIdentityContext context,
+                                      String firstNameRaw,
+                                      String lastNameRaw,
+                                      String usernameRaw,
                                       UserModel existingUser) {
 
         int maxLen = parseMaxLength(mapperModel.getConfig().get(PROP_MAX_LENGTH));
 
-        String rawPrefix = sanitize(mapperModel.getConfig().getOrDefault(PROP_PREFIX, ""));
-        String rawSuffix = sanitize(mapperModel.getConfig().getOrDefault(PROP_SUFFIX, ""));
+        String rawPrefix  = sanitize(mapperModel.getConfig().getOrDefault(PROP_PREFIX, ""));
+        String rawSuffix  = sanitize(mapperModel.getConfig().getOrDefault(PROP_SUFFIX, ""));
         String targetAttr = mapperModel.getConfig().get(PROP_TARGET_ATTRIBUTE);
 
         // --- name part ---
-        String firstName = nullToEmpty(context.getFirstName());
-        String lastName  = nullToEmpty(context.getLastName());
+        String firstName = nullToEmpty(firstNameRaw);
+        String lastName  = nullToEmpty(lastNameRaw);
 
-        String n   = sanitize(firstName.isEmpty() ? "x" : String.valueOf(firstName.charAt(0)));
+        String n = sanitize(firstName.isEmpty() ? "" : String.valueOf(firstName.charAt(0)));
+        if (n.isEmpty()) n = "x";
+
         String lll = sanitize(lastName.length() >= 3 ? lastName.substring(0, 3) : lastName);
         if (lll.isEmpty()) lll = "x"; // ultimate fallback
 
         // --- hash part ---
-        String username = nullToEmpty(context.getUsername());
+        String username = nullToEmpty(usernameRaw);
         String hhhh = sha256Hex4(username.isEmpty() ? n + lll : username);
 
         // Build the raw base (without prefix/suffix)
         String core = n + lll + hhhh; // e.g. "jdoe3f2a"
 
-        // Assemble with prefix/suffix, then enforce maxLen and POSIX first-char rule
+        // Assemble with prefix/suffix, then enforce POSIX first-char rule and maxLen
         String base = buildBase(rawPrefix, core, rawSuffix, maxLen);
-        base = ensureStartsWithLetter(base);
+        base = ensureStartsWithLetter(base, maxLen);
 
         // --- collision resolution ---
         String candidate = base;
         int counter = 2;
         while (hasCollision(session, realm, targetAttr, candidate, existingUser)) {
+            if (counter > MAX_COLLISION_ATTEMPTS) {
+                throw new IllegalStateException("Could not generate a unique value for attribute '"
+                        + targetAttr + "' after " + MAX_COLLISION_ATTEMPTS + " attempts (base: " + base + ")");
+            }
             String counterStr = String.valueOf(counter);
-            // Truncate base to leave room for the counter digits
             int allowedBaseLen = maxLen - counterStr.length();
             if (allowedBaseLen < 1) {
-                // Extreme edge-case: maxLen is tiny; just use counter alone (with a letter prefix)
+                // Extreme edge-case: maxLen is tiny; "u" + as many counter digits as fit
                 candidate = "u" + counterStr.substring(0, Math.min(counterStr.length(), maxLen - 1));
             } else {
                 candidate = base.substring(0, Math.min(base.length(), allowedBaseLen)) + counterStr;
@@ -193,14 +233,13 @@ public class PosixUsernameMapper extends AbstractIdentityProviderMapper {
 
     /**
      * Assembles prefix + core + suffix and trims to maxLen.
-     * The trimming priority is: protect prefix and suffix first; shorten core in the middle.
+     * The trimming priority is: protect prefix and suffix first; shorten core.
      */
     private String buildBase(String prefix, String core, String suffix, int maxLen) {
         int available = maxLen - prefix.length() - suffix.length();
         if (available <= 0) {
             // prefix + suffix already exceed maxLen — truncate suffix, then prefix
-            String combined = (prefix + suffix).substring(0, maxLen);
-            return combined;
+            return (prefix + suffix).substring(0, maxLen);
         }
         String trimmedCore = core.substring(0, Math.min(core.length(), available));
         return prefix + trimmedCore + suffix;
@@ -222,14 +261,15 @@ public class PosixUsernameMapper extends AbstractIdentityProviderMapper {
     }
 
     /**
-     * Ensures the string starts with [a-z]. If the first character is a digit,
-     * prepend 'u' and trim the last character to stay within maxLen — but here
-     * we just prepend; the caller already enforces maxLen via buildBase / trimming.
+     * Ensures the string starts with [a-z]. If not, prepends 'u' and trims
+     * the result back to maxLen.
      */
-    private static String ensureStartsWithLetter(String s) {
+    private static String ensureStartsWithLetter(String s, int maxLen) {
         if (s.isEmpty()) return "u";
-        if (Character.isLetter(s.charAt(0))) return s;
-        return "u" + s; // will be trimmed by the caller if needed
+        char first = s.charAt(0);
+        if (first >= 'a' && first <= 'z') return s;
+        String prefixed = "u" + s;
+        return prefixed.length() > maxLen ? prefixed.substring(0, maxLen) : prefixed;
     }
 
     // -------------------------------------------------------------------------
